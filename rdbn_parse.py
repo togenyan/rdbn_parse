@@ -8,13 +8,25 @@ import struct
 import binascii
 import sqlite3
 
-
 import logging
 import logzero
 from logzero import logger
 
 def ensure_allzero(b):
     return all(map(lambda x: x == 0, b))
+
+def get_type(id_):
+    if id_ == 3: # BOOL
+        return ("INTEGER", 1)
+    if id_ in (4, 5, 6):
+        return ("INTEGER", 2 ** (id_ - 4))
+    if id_ == 0x0F:
+        return ("INTEGER", 4)
+    if id_ == 0x14:
+        return ("TEXT", 4)
+    if id_ == 0x15:
+        return ("TEXT", 4) # TODO: BLOB
+    return None
 
 def parse(f, dbfile):
     if f.read(4) != b"RDBN":
@@ -122,7 +134,7 @@ def parse(f, dbfile):
 
         # get table information
         structure = [x for x in tables if x["name"] == tname[0]][0]
-        columns = ", ".join(x["name"] for x in structure["children"])
+        columns = ", ".join("{} {}".format(x["name"], get_type(x["unk1"])[0]) for x in structure["children"])
         con.execute("CREATE TABLE IF NOT EXISTS {} ({});".format(structure["name"], columns))
 
         # TODO: skip entries
@@ -135,46 +147,19 @@ def parse(f, dbfile):
             row_data = f.read(size)
             row_out = []
             for child in structure["children"]:
-                if child["unk1"] == 3:
-                    if child["size"] != 1:
-                        logger.error("type 3 is 1 byte long, but {} found".format(child["size"]))
-                        return False
-                    row_out.append(bool(int.from_bytes(row_data[child["offset"]:child["offset"]+1], "little")))
-                elif child["unk1"] == 4:
-                    if child["size"] != 1:
-                        logger.error("type 4 is 1 byte long, but {}".format(child["size"]))
-                        return False
-                    row_out.append(int.from_bytes(row_data[child["offset"]:child["offset"]+1], "little"))
-                elif child["unk1"] == 5:
-                    if child["size"] != 2:
-                        logger.error("type 5 is 2 byte long, but {} found".format(child["size"]))
-                        return False
-                    row_out.append(int.from_bytes(row_data[child["offset"]:child["offset"]+2], "little"))
-                elif child["unk1"] == 6:
-                    if child["size"] != 4:
-                        logger.error("type 6 is 4 byte long, but {} found".format(child["size"]))
-                        return False
-                    row_out.append(int.from_bytes(row_data[child["offset"]:child["offset"]+4], "little"))
-                elif child["unk1"] == 0xF:
-                    if child["size"] != 4:
-                        logger.error("type F is 4 byte long, but {} found".format(child["size"]))
-                        return False
-                    row_out.append(int.from_bytes(row_data[child["offset"]:child["offset"]+4], "little"))
-                elif child["unk1"] == 0x14:
-                    if child["size"] != 4:
-                        logger.error("type 14 is 4 byte long, but {} found".format(child["size"]))
-                        return False
-                    row_out.append("[{:08X}]".format(
-                        int.from_bytes(row_data[child["offset"]:child["offset"]+4], "little")))
-                elif child["unk1"] == 0x15:
-                    if child["size"] != 4:
-                        logger.error("type 15 is 4 byte long, but {} found".format(child["size"]))
-                        return False
-                    row_out.append("[{:08X}]".format(
-                        int.from_bytes(row_data[child["offset"]:child["offset"]+4], "little")))
-                else:
+                type_ = get_type(child["unk1"])
+                if type_ is None:
                     logger.error("unknown data type {} (size: {})".format(child["unk1"], child["size"]))
                     return False
+                if child["size"] != type_[1]:
+                    logger.error("type {} is {} byte long, but {} found".format(
+                        child["unk1"], type_[1], child["size"]))
+                    return False
+                data = int.from_bytes(row_data[child["offset"]:child["offset"]+child["size"]], "little")
+                if type_[0] == "TEXT":
+                    row_out.append("[{:08X}]".format(data))
+                else:
+                    row_out.append(data)
             placeholder = ", ".join("?" * len(row_out))
             con.execute("INSERT INTO {} VALUES ({});".format(structure["name"], placeholder), row_out)
     con.commit()
