@@ -103,6 +103,9 @@ def parse(f, dbfile):
         if not ensure_allzero(f.read(12)):
             logger.warning("nonzero value found after list name id")
 
+    for l in lists:
+        logger.debug(lists[l])
+
     con = sqlite3.connect(dbfile)
 
     # list-table relationship and unknown property for each types
@@ -111,12 +114,13 @@ def parse(f, dbfile):
     for _ in range(list_count):
         list_order.append(strings_table[int.from_bytes(f.read(4), "little")])
     idx = 0
+    table_names = []
     for _ in range(type_count + table_count):
         name = strings_table[int.from_bytes(f.read(4), "little")]
         if name in tables:
-            list_name = [x for x in lists.values() if x["index"] == idx][0]["name"]
-            list_table[list_name] = name
-            idx += 1
+            table_names.append(name)
+    for l in lists:
+        list_table[l] = table_names[lists[l]["index"]]
     for _ in range(list_count + type_count + table_count):
         # skip unknown values
         f.read(4)
