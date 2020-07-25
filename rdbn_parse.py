@@ -28,6 +28,33 @@ def get_type(id_):
         return ("TEXT", 4) # TODO: BLOB
     return None
 
+def sqlite3_safe(wd):
+    if wd.upper() in ("ABORT", "ACTION", "ADD", "AFTER", "ALL",
+                      "ALTER", "ALWAYS", "ANALYZE", "AND", "AS", "ASC", "ATTACH",
+                      "AUTOINCREMENT", "BEFORE", "BEGIN", "BETWEEN", "BY", "CASCADE",
+                      "CASE", "CAST", "CHECK", "COLLATE", "COLUMN", "COMMIT", "CONFLICT",
+                      "CONSTRAINT", "CREATE", "CROSS", "CURRENT", "CURRENT_DATE",
+                      "CURRENT_TIME", "CURRENT_TIMESTAMP", "DATABASE", "DEFAULT",
+                      "DEFERRABLE", "DEFERRED", "DELETE", "DESC", "DETACH", "DISTINCT",
+                      "DO", "DROP", "EACH", "ELSE", "END", "ESCAPE", "EXCEPT", "EXCLUDE",
+                      "EXCLUSIVE", "EXISTS", "EXPLAIN", "FAIL", "FILTER", "FIRST",
+                      "FOLLOWING", "FOR", "FOREIGN", "FROM", "FULL", "GENERATED", "GLOB",
+                      "GROUP", "GROUPS", "HAVING", "IF", "IGNORE", "IMMEDIATE", "IN",
+                      "INDEX", "INDEXED", "INITIALLY", "INNER", "INSERT", "INSTEAD",
+                      "INTERSECT", "INTO", "IS", "ISNULL", "JOIN", "KEY", "LAST", "LEFT",
+                      "LIKE", "LIMIT", "MATCH", "NATURAL", "NO", "NOT", "NOTHING",
+                      "NOTNULL", "NULL", "NULLS", "OF", "OFFSET", "ON", "OR", "ORDER",
+                      "OTHERS", "OUTER", "OVER", "PARTITION", "PLAN", "PRAGMA",
+                      "PRECEDING", "PRIMARY", "QUERY", "RAISE", "RANGE", "RECURSIVE",
+                      "REFERENCES", "REGEXP", "REINDEX", "RELEASE", "RENAME", "REPLACE",
+                      "RESTRICT", "RIGHT", "ROLLBACK", "ROW", "ROWS", "SAVEPOINT",
+                      "SELECT", "SET", "TABLE", "TEMP", "TEMPORARY", "THEN", "TIES", "TO",
+                      "TRANSACTION", "TRIGGER", "UNBOUNDED", "UNION", "UNIQUE", "UPDATE",
+                      "USING", "VACUUM", "VALUES", "VIEW", "VIRTUAL", "WHEN", "WHERE",
+                      "WINDOW", "WITH", "WITHOUT", ):
+        return wd + "_"
+    return wd
+
 def parse(f, dbfile):
     if f.read(4) != b"RDBN":
         logger.error("magic not found")
@@ -68,7 +95,7 @@ def parse(f, dbfile):
         flag = f.read(1)[0] # 1 if it has no child?
         if flag != (0 if child_count else 1):
             logger.warning("unexpected use of flag: (flag={}, children={})".format(flag, child_count))
-        col = {"name": strings_table[name_crc],
+        col = {"name": sqlite3_safe(strings_table[name_crc]),
                "unk1": unk1,
                "unk2": unk2,
                "size": unk3,
