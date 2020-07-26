@@ -15,18 +15,80 @@ from logzero import logger
 def ensure_allzero(b):
     return all(map(lambda x: x == 0, b))
 
-def get_type(id_):
-    if id_ == 3: # BOOL
-        return ("INTEGER", 1)
-    if id_ in (4, 5, 6):
-        return ("INTEGER", 2 ** (id_ - 4))
-    if id_ == 0x0F:
-        return ("INTEGER", 4)
-    if id_ == 0x14:
-        return ("TEXT", 4)
-    if id_ == 0x15:
-        return ("TEXT", 4) # TODO: BLOB
-    return None
+class DBType:
+    def __init__(self, id_, subid, name):
+        self.id_, self.subid = id_, subid
+        self.name = sqlite3_safe(name)
+        if id_ == 1:
+            if subid == 3: # BOOL
+                self.sqlite_type, self.data_size, self.signed = "INTEGER", 1, False
+            elif subid in (4, 5, 6):
+                self.sqlite_type, self.data_size, self.signed = "INTEGER", 2 ** (subid - 4), False
+            elif subid == 0x0A: # SIGNED
+                self.sqlite_type, self.data_size, self.signed = "INTEGER", 4, True
+            elif subid == 0x0D:
+                self.sqlite_type, self.data_size = "REAL", 4
+            elif subid == 0x0F:
+                self.sqlite_type, self.data_size, self.signed = "INTEGER", 4, False
+            else:
+                raise ValueError("type (0x{:02x}, 0x{:02x}) is not supported".format(id_, subid))
+        elif id_ == 2: # array
+            self.sqlite_type = "TEXT"
+            if subid == 0: # integer?
+                self.list_entry_type = int
+            elif subid == 1: # integer?
+                self.list_entry_type = int
+            elif subid == 3: # Float array
+                self.list_entry_type = float
+            else:
+                raise ValueError("type (0x{:02x}, 0x{:02x}) is not supported".format(id_, subid))
+        elif id_ == 3: # ID and special types
+            if subid == 0x0F:
+                self.sqlite_type, self.data_size, self.signed = "INTEGER", 4, False
+            elif subid == 0x12: # float quadruple?
+                self.sqlite_type, self.data_size = "TEXT", 16
+            elif subid == 0x13: # (X, Y, Z, W) coordinate
+                self.sqlite_type, self.data_size = "TEXT", 16
+            elif subid == 0x14:
+                self.sqlite_type, self.data_size = "TEXT", 4 # TODO: TEXT
+            elif subid == 0x15:
+                self.sqlite_type, self.data_size = "TEXT", 4 # TODO: BLOB
+            else:
+                raise ValueError("type (0x{:02x}, 0x{:02x}) is not supported".format(id_, subid))
+        else:
+            raise ValueError("type (0x{:02x}, 0x{:02x}) is not supported".format(id_, subid))
+
+    def convert(self, data):
+        if self.id_ == 2:
+            count = len(data) // 4
+            if len(data) % 4 != 0:
+                logger.error("length must be multiple of 4, but {}".format(len(data)))
+                return None
+            if self.list_entry_type is int:
+                return "[{}]".format(", ".join(str(x) for x in struct.unpack("<{}I".format(count), data)))
+            if self.list_entry_type is float:
+                return "[{}]".format(", ".join(str(x) for x in struct.unpack("<{}f".format(count), data)))
+            logger.error("data of type ({:04x}, {:04x}) is not handled".format(
+                self.id_, self.subid, self.size, len(data)))
+            return None
+
+        if self.data_size != len(data):
+            logger.error("data of type (0x{:02x}, 0x{:02x}) is expected to be {} byte long, but {}".format(
+                self.id_, self.subid, self.data_size, len(data)))
+            return None
+        if self.sqlite_type == "REAL":
+            return struct.unpack("<f", data)[0]
+        elif self.sqlite_type == "INTEGER":
+            return int.from_bytes(data, "little", signed=self.signed)
+        elif self.sqlite_type == "BLOB":
+            return data
+        elif self.subid in (0x12, 0x13):
+            return "[{:f}, {:f}, {:f}, {:f}]".format(*struct.unpack("<4f", data))
+        elif self.sqlite_type == "TEXT":
+            return "[{:08X}]".format(struct.unpack("<I", data)[0])
+        logger.error("data of type (0x{:02x}, 0x{:02x}) is not handled".format(
+            self.id_, self.subid, len(data)))
+        return None
 
 def sqlite3_safe(wd):
     if wd.upper() in ("ABORT", "ACTION", "ADD", "AFTER", "ALL",
@@ -95,7 +157,7 @@ def parse(f, dbfile):
         flag = f.read(1)[0] # 1 if it has no child?
         if flag != (0 if child_count else 1):
             logger.warning("unexpected use of flag: (flag={}, children={})".format(flag, child_count))
-        col = {"name": sqlite3_safe(strings_table[name_crc]),
+        col = {"name": strings_table[name_crc],
                "unk1": unk1,
                "unk2": unk2,
                "size": unk3,
@@ -167,8 +229,11 @@ def parse(f, dbfile):
         size = list_struct["size"]
         count = list_struct["count"]
 
+        # type convertors
+        convertors = [DBType(c["unk2"], c["unk1"], c["name"]) for c in table_type["children"]]
+
         # get table information
-        columns = ", ".join("{} {}".format(c["name"], get_type(c["unk1"])[0]) for c in table_type["children"])
+        columns = ", ".join("{} {}".format(c.name, c.sqlite_type) for c in convertors)
 
         con.execute("CREATE TABLE IF NOT EXISTS {} ({});".format(table_name, columns))
 
@@ -176,20 +241,9 @@ def parse(f, dbfile):
         for i in range(count):
             row_data = f.read(size)
             row_out = []
-            for child in table_type["children"]:
-                type_ = get_type(child["unk1"])
-                if type_ is None:
-                    logger.error("unknown data type {} (size: {})".format(child["unk1"], child["size"]))
-                    return False
-                if child["size"] != type_[1]:
-                    logger.error("type {} is {} byte long, but {} found".format(
-                        child["unk1"], type_[1], child["size"]))
-                    return False
-                data = int.from_bytes(row_data[child["offset"]:child["offset"]+child["size"]], "little")
-                if type_[0] == "TEXT":
-                    row_out.append("[{:08X}]".format(data))
-                else:
-                    row_out.append(data)
+            for child, conv in zip(table_type["children"], convertors):
+                data = row_data[child["offset"]:child["offset"]+child["size"]]
+                row_out.append(conv.convert(data))
             placeholder = ", ".join("?" * len(row_out))
             con.execute("INSERT INTO {} VALUES ({});".format(table_name, placeholder), row_out)
     con.commit()
