@@ -128,7 +128,7 @@ def parse(f, dbfile):
     logger.debug("data_size = 0x{:08x}".format(data_size))
 
     table_count, unk22, type_count, unk24, list_count, unk31, unk32, unk33, unk34, string_offset = \
-        struct.unpack("<16x6x5H5H6x", f.read(48))
+        struct.unpack("<16x6x5H4HI4x", f.read(48))
     logger.debug("table_count = {}".format(table_count))
     logger.debug("unk22 = 0x{:04x}".format(unk22))
     logger.debug("type_count = 0x{:04x}".format(type_count))
@@ -138,6 +138,7 @@ def parse(f, dbfile):
     logger.debug("unk32 = 0x{:04x}".format(unk32))
     logger.debug("unk33 = 0x{:04x}".format(unk33))
     logger.debug("unk34 = 0x{:04x}".format(unk34))
+    logger.debug("string_offset = 0x{:04x}".format(string_offset))
 
     f.seek(data_offset + string_offset)
     strings = f.read()
