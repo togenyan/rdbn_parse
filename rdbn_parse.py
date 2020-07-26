@@ -149,7 +149,7 @@ def parse(f, dbfile):
     f.seek(data_offset)
 
     tmp_tables = []
-    child_counts = []
+    tmp_children = []
     nondata_strings = []
     for i in range(table_count + type_count):
         name_crc, unk1, unk2, unk3, child_count, unk4 = struct.unpack("<I 2H 2H I", f.read(16))
@@ -163,6 +163,7 @@ def parse(f, dbfile):
                "unk1": unk1,
                "unk2": unk2,
                "size": unk3,
+               "child_count": child_count,
                "offset": unk4,
                "children": [],
                "flag": flag,
@@ -171,13 +172,12 @@ def parse(f, dbfile):
         f.read(15)
 
         if child_count == 0:
-            val = next((x for x in child_counts if x > 0))
-            idx = child_counts.index(val)
-            child_counts[idx] = val - 1
-            tmp_tables[idx]["children"].append(col)
+            tmp_children.append(col)
         else:
-            child_counts.append(child_count)
             tmp_tables.append(col)
+    for t in tmp_tables:
+        for i in range(t["size"], t["size"] + t["child_count"]):
+            t["children"].append(tmp_children[i])
     tables = {x["name"]: x for x in tmp_tables}
 
     lists = {}
