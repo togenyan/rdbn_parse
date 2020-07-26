@@ -43,16 +43,16 @@ class DBType:
             else:
                 raise ValueError("type (0x{:02x}, 0x{:02x}) is not supported".format(id_, subid))
         elif id_ == 3: # ID and special types
-            if subid == 0x0F:
+            if subid == 0x0F: # ID
                 self.sqlite_type, self.data_size, self.signed = "INTEGER", 4, False
             elif subid == 0x12: # float quadruple?
                 self.sqlite_type, self.data_size = "TEXT", 16
             elif subid == 0x13: # (X, Y, Z, W) coordinate
                 self.sqlite_type, self.data_size = "TEXT", 16
-            elif subid == 0x14:
-                self.sqlite_type, self.data_size = "TEXT", 4 # TODO: TEXT
-            elif subid == 0x15:
-                self.sqlite_type, self.data_size = "TEXT", 4 # TODO: BLOB
+            elif subid == 0x14: # TEXT
+                self.sqlite_type, self.data_size = "TEXT", 4
+            elif subid == 0x15: # BLOB
+                self.sqlite_type, self.data_size = "TEXT", 4
             else:
                 raise ValueError("type (0x{:02x}, 0x{:02x}) is not supported".format(id_, subid))
         else:
@@ -80,12 +80,12 @@ class DBType:
             return struct.unpack("<f", data)[0]
         elif self.sqlite_type == "INTEGER":
             return int.from_bytes(data, "little", signed=self.signed)
-        elif self.sqlite_type == "BLOB":
-            return data
         elif self.subid in (0x12, 0x13):
             return "[{:f}, {:f}, {:f}, {:f}]".format(*struct.unpack("<4f", data))
-        elif self.sqlite_type == "TEXT":
-            return "[{:08X}]".format(struct.unpack("<I", data)[0])
+        elif self.subid in (0x14, 0x15):
+            return int.from_bytes(data, "little")
+        elif self.sqlite_type == "BLOB":
+            return data
         logger.error("data of type (0x{:02x}, 0x{:02x}) is not handled".format(
             self.id_, self.subid, len(data)))
         return None
@@ -150,6 +150,7 @@ def parse(f, dbfile):
 
     tmp_tables = []
     child_counts = []
+    nondata_strings = []
     for i in range(table_count + type_count):
         name_crc, unk1, unk2, unk3, child_count, unk4 = struct.unpack("<I 2H 2H I", f.read(16))
         logger.debug(
@@ -166,6 +167,7 @@ def parse(f, dbfile):
                "children": [],
                "flag": flag,
         }
+        nondata_strings.append(col["name"])
         f.read(15)
 
         if child_count == 0:
@@ -182,6 +184,7 @@ def parse(f, dbfile):
     for i in range(list_count):
         idx, unk, offset, size, count = struct.unpack("<2HIII", f.read(16))
         listname_crc = int.from_bytes(f.read(4), "little")
+        nondata_strings.append(strings_table[listname_crc])
         lists[strings_table[listname_crc]] = {
             "index": idx,
             "name": strings_table[listname_crc],
@@ -244,7 +247,24 @@ def parse(f, dbfile):
             row_out = []
             for child, conv in zip(table_type["children"], convertors):
                 data = row_data[child["offset"]:child["offset"]+child["size"]]
-                row_out.append(conv.convert(data))
+                if conv.id_ == 3 and conv.subid in (0x14, 0x15):
+                    addr = conv.convert(data)
+                    if isinstance(addr, str):
+                        print("str", addr)
+                    if addr != 0 and addr != 0xFFFFFFFF and addr < len(strings):
+                        # TODO: more accurate string offset detection
+                        s = strings[addr:].split(b"\0")[0].decode()
+                        if strings[addr - 1] != 0:
+                            data = "[{:08x}]".format(addr)
+                        elif s in nondata_strings:
+                            data = "[{:08x}]".format(addr)
+                        else: # OK
+                            data = s
+                    else:
+                        data = "[{:08x}]".format(addr)
+                else:
+                    data = conv.convert(data)
+                row_out.append(data)
             placeholder = ", ".join("?" * len(row_out))
             con.execute("INSERT INTO {} VALUES ({});".format(table_name, placeholder), row_out)
     con.commit()
