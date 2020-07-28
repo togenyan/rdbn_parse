@@ -24,8 +24,8 @@ class DBType:
                 self.sqlite_type, self.data_size, self.signed = "INTEGER", 1, False
             elif subid in (4, 5, 6):
                 self.sqlite_type, self.data_size, self.signed = "INTEGER", 2 ** (subid - 4), False
-            elif subid == 0x0A: # SIGNED
-                self.sqlite_type, self.data_size, self.signed = "INTEGER", 4, True
+            elif subid in (8, 9, 0xA): # SIGNED
+                self.sqlite_type, self.data_size, self.signed = "INTEGER", 2 ** (subid - 8), True
             elif subid == 0x0D:
                 self.sqlite_type, self.data_size = "REAL", 4
             elif subid == 0x0F:
