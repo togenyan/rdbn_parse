@@ -267,6 +267,8 @@ def parse(f, dbfile):
                 row_out.append(data)
             placeholder = ", ".join("?" * len(row_out))
             con.execute("INSERT INTO {} VALUES ({});".format(table_name, placeholder), row_out)
+        logger.debug("list {} ends at 0x{:08x}".format(list_name, f.tell()))
+
     con.commit()
     con.close()
     logger.debug("proccessing finished at 0x{:08x}".format(f.tell()))
