@@ -7,6 +7,7 @@ __license__ = "MIT"
 import struct
 import binascii
 import sqlite3
+from pathlib import Path
 
 import logging
 import logzero
@@ -117,10 +118,15 @@ def sqlite3_safe(wd):
         return wd + "_"
     return wd
 
-def parse(f, dbfile):
+def parse(f, dbfile, use_prefix=False):
     if f.read(4) != b"RDBN":
         logger.error("magic not found")
         return False
+
+
+    prefix = "".join(c for c in Path(f.name).name.replace(".cfg.bin", "").upper()
+                     if "A" <= c <= "Z" or "0" <= c <= "9" or c == "_")
+    prefix += "_"
 
     data_offset, unk2, _, unk3, data_size = struct.unpack("<HHHHI", f.read(12))
     logger.debug("data_offset = 0x{:04x}".format(data_offset))
@@ -220,6 +226,7 @@ def parse(f, dbfile):
 
     for list_name in list_order:
         table_name = list_table[list_name]
+        table_name_sql = table_name if not use_prefix else (prefix + table_name)
 
         # fetch list
         list_struct = lists[list_name]
@@ -239,7 +246,7 @@ def parse(f, dbfile):
         # get table information
         columns = ", ".join("{} {}".format(c.name, c.sqlite_type) for c in convertors)
 
-        con.execute("CREATE TABLE IF NOT EXISTS {} ({});".format(table_name, columns))
+        con.execute("CREATE TABLE IF NOT EXISTS {} ({});".format(table_name_sql, columns))
 
         # insert information
         for i in range(count):
@@ -266,7 +273,7 @@ def parse(f, dbfile):
                     data = conv.convert(data)
                 row_out.append(data)
             placeholder = ", ".join("?" * len(row_out))
-            con.execute("INSERT INTO {} VALUES ({});".format(table_name, placeholder), row_out)
+            con.execute("INSERT INTO {} VALUES ({});".format(table_name_sql, placeholder), row_out)
         logger.debug("list {} ends at 0x{:08x}".format(list_name, f.tell()))
 
     con.commit()
@@ -281,11 +288,12 @@ def main():
     parser.add_argument("file", type=argparse.FileType("rb"))
     parser.add_argument("dbfile")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--with-prefix", action="store_true")
     args = parser.parse_args()
     logzero.loglevel(logging.WARN)
     if args.verbose:
         logzero.loglevel(logging.DEBUG)
-    if parse(args.file, args.dbfile):
+    if parse(args.file, args.dbfile, use_prefix=args.with_prefix):
         sys.exit(1)
     sys.exit(0)
 
