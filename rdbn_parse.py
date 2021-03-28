@@ -20,6 +20,7 @@ from logzero import logger
 def ensure_allzero(b: bytes):
     return all(map(lambda x: x == 0, b))
 
+
 class DBType:
     id: int
     subid: int
@@ -28,27 +29,11 @@ class DBType:
     list_entry_type: Type[Any]
     signed: bool
 
-    # used only when count > 1
-    elm_size: int
-    elm_count: int
-    elm_type: "DBType"
-
-    def __init__(self, _id: int, _subid: int, _name: str, _elm_size: int, _elm_count: int):
+    def __init__(self, _id: int, _subid: int, _name: str):
         self.id = _id
         self.subid = _subid
         self.name = sqlite3_safe(_name)
-        self.elm_size = _elm_size
-        self.elm_count = _elm_count
 
-        if self.elm_count < 1:
-            raise ValueError("count must be positive")
-        if self.elm_count > 1:
-            # array
-            #   length: column.count
-            #   total size: column.count * column.size
-            self.elm_type = DBType(self.id, self.subid, self.name, self.elm_size, 1)
-            self.sqlite_type = "TEXT"
-            return
         if self.id == 1:
             if self.subid == 3:  # bool
                 self.sqlite_type, self.signed = "INTEGER", False
@@ -92,11 +77,6 @@ class DBType:
             raise ValueError("type (0x{:02x}, 0x{:02x}) is not supported".format(self.id, self.subid))
 
     def convert(self, data: bytes) -> Optional[Union[str, int, bytes]]:
-        if self.elm_count > 1:
-            if len(data) != self.elm_size * self.elm_count:
-                raise ValueError(f"length must be {self.elm_size * self.elm_count} but {len(data)}")
-            out = [str(self.elm_type.convert(data[self.elm_size*i:self.elm_size*(i+1)])) for i in range(self.elm_count)]
-            return "[{}]".format(", ".join(out))
         if self.id == 2:
             count = len(data) // 4
             if len(data) % 4 != 0:
@@ -120,7 +100,6 @@ class DBType:
             return int.from_bytes(data, "little")
         elif self.sqlite_type == "BLOB":
             return data
-        print(self.sqlite_type)
         logger.error("data of type (0x{:02x}, 0x{:02x}) is not handled".format(
             self.id, self.subid))
         return None
@@ -232,7 +211,7 @@ class Column(Item):
     sub_typeid: int
     size: int  # size per data
     offset: int
-    count: int  # 1 for non-array data
+    unk: int  # 1 for non-array data
 
 
 @dataclass(frozen=True)
@@ -341,7 +320,7 @@ def parse(f: FileIO, dbfile: str, use_prefix: bool=False) -> bool:
 
     tmp_columns: List[Column] = []
     for i in range(header.column_count):
-        name_crc, subid, id, size, offset, count = struct.unpack("<I 2H 2I I", f.read(header.item_size))
+        name_crc, subid, id, size, offset, unk = struct.unpack("<I 2H 2I I", f.read(header.item_size))
         f.read(header.item_data_size - header.item_size)
         col = Column(
             id=name_crc,
@@ -350,7 +329,7 @@ def parse(f: FileIO, dbfile: str, use_prefix: bool=False) -> bool:
             sub_typeid=subid,
             size=size,
             offset=offset,
-            count=count,
+            unk=unk,
         )
         logger.debug(col)
         nondata_strings.append(col.name)
@@ -437,7 +416,7 @@ def parse(f: FileIO, dbfile: str, use_prefix: bool=False) -> bool:
         logger.debug("list {} starts at 0x{:08x}".format(l.name, f.tell()))
 
         # type convertors
-        convertors = [DBType(c.typeid, c.sub_typeid, c.name, c.size, c.count) for c in table_type.columns]
+        convertors = [DBType(c.typeid, c.sub_typeid, c.name) for c in table_type.columns]
 
         # get table information
         columns = ", ".join("{} {}".format(c.name, c.sqlite_type) for c in convertors)
@@ -448,8 +427,12 @@ def parse(f: FileIO, dbfile: str, use_prefix: bool=False) -> bool:
         for i in range(l.count):
             row_data = f.read(l.size)
             row_out: List[Optional[Union[str, int, bytes]]] = []
+            last_pos = 0
             for col, conv in zip(table_type.columns, convertors):
-                data = row_data[col.offset:col.offset+col.size*col.count]
+                if i == 0 and last_pos != col.offset:
+                    logger.debug("data reading jump {} to {}".format(last_pos, col.offset))
+                last_pos = col.offset + col.size
+                data = row_data[col.offset:col.offset+col.size]
                 if conv.id == 3 and conv.subid in (0x14, 0x15):
                     addr = conv.convert(data)
                     assert isinstance(addr, int)
@@ -467,6 +450,9 @@ def parse(f: FileIO, dbfile: str, use_prefix: bool=False) -> bool:
                 else:
                     data = conv.convert(data)
                 row_out.append(data)
+            if i == 0 and last_pos != l.size:
+                logger.debug("data reading ends at {}, leaving {} byte unread".format(last_pos, l.size - last_pos))
+                logger.debug("unread data (only the first row will be shown): {}".format(row_data[last_pos:]))
             placeholder = ", ".join("?" * len(row_out))
             con.execute("INSERT INTO {} VALUES ({});".format(table_name_sql, placeholder), row_out)
         logger.debug("list {} ends at 0x{:08x}".format(l.name, f.tell()))
