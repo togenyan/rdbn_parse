@@ -420,6 +420,7 @@ def parse(f: FileIO, dbfile: str, use_prefix: bool=False) -> bool:
 
         # get table information
         columns = ", ".join("{} {}".format(c.name, c.sqlite_type) for c in convertors)
+        columns += ", unused_data TEXT"
 
         con.execute("CREATE TABLE IF NOT EXISTS {} ({});".format(table_name_sql, columns))
 
@@ -430,7 +431,7 @@ def parse(f: FileIO, dbfile: str, use_prefix: bool=False) -> bool:
             last_pos = 0
             for col, conv in zip(table_type.columns, convertors):
                 if i == 0 and last_pos != col.offset:
-                    logger.debug("data reading jump {} to {}".format(last_pos, col.offset))
+                    logger.debug("data reading jumps from {} to {}".format(last_pos, col.offset))
                 last_pos = col.offset + col.size
                 data = row_data[col.offset:col.offset+col.size]
                 if conv.id == 3 and conv.subid in (0x14, 0x15):
@@ -453,8 +454,9 @@ def parse(f: FileIO, dbfile: str, use_prefix: bool=False) -> bool:
             if i == 0 and last_pos != l.size:
                 logger.debug("data reading ends at {}, leaving {} byte unread".format(last_pos, l.size - last_pos))
                 logger.debug("unread data (only the first row will be shown): {}".format(row_data[last_pos:]))
-            placeholder = ", ".join("?" * len(row_out))
-            con.execute("INSERT INTO {} VALUES ({});".format(table_name_sql, placeholder), row_out)
+            placeholder = ", ".join("?" * (len(row_out) + 1))
+            con.execute("INSERT INTO {} VALUES ({});".format(table_name_sql, placeholder),
+                        row_out + [binascii.b2a_hex(row_data[last_pos:]).decode()])
         logger.debug("list {} ends at 0x{:08x}".format(l.name, f.tell()))
 
     con.commit()
